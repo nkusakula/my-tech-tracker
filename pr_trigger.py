@@ -9,9 +9,9 @@ Usage:
     python pr_trigger.py [--repo owner/name] [--date YYYY-MM-DD]
 
 Environment variables:
-    COPILOT_GITHUB_TOKEN   GitHub token with Copilot access (required)
-    GITHUB_TOKEN           GitHub token for the GitHub API (optional, falls
-                           back to COPILOT_GITHUB_TOKEN)
+    GITHUB_TOKEN           GitHub token for both the GitHub API and Copilot SDK
+                           auth (the built-in Actions token works for API calls;
+                           Copilot access requires a token with copilot scope).
 """
 
 from __future__ import annotations
@@ -26,15 +26,19 @@ import urllib.parse
 import urllib.request
 from datetime import date, timedelta
 
-from copilot import CopilotClient
-from copilot.generated.session_events import AssistantMessageData
-from copilot.session import PermissionHandler
+from copilot.client import CopilotClient, SubprocessConfig
+from copilot.session import (
+    CopilotSession,
+    PermissionRequest,
+    PermissionRequestResult,
+)
+from copilot.generated.session_events import SessionEvent, SessionEventType
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 ROOT = pathlib.Path(__file__).parent
-SKILL_DIR = ROOT / ".github" / "skills" / "pr-analyzer"
+SKILL_DIR = str(ROOT / ".github" / "skills")
 BLOG_DIR = ROOT / "blog"
 BLOG_DIR.mkdir(exist_ok=True)
 
@@ -43,7 +47,7 @@ BLOG_DIR.mkdir(exist_ok=True)
 # ---------------------------------------------------------------------------
 
 def _github_headers() -> dict[str, str]:
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("COPILOT_GITHUB_TOKEN")
+    token = os.environ.get("GITHUB_TOKEN")
     headers: dict[str, str] = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -103,12 +107,15 @@ async def run(repo: str, target_date: date) -> None:
     pr_text = format_pr_list(prs, repo)
     print(f"  Found {len(prs)} PR(s).\n")
 
-    client = CopilotClient()
+    token = os.environ.get("GITHUB_TOKEN")
+    config = SubprocessConfig(github_token=token) if token else None
+
+    client = CopilotClient(config=config)
     await client.start()
 
-    session = await client.create_session(
-        skill_directories=[str(SKILL_DIR)],
-        on_permission_request=PermissionHandler.approve_all,
+    session: CopilotSession = await client.create_session(
+        skill_directories=[SKILL_DIR],
+        on_permission_request=lambda req: PermissionRequestResult(kind="approved"),
     )
 
     prompt = (
@@ -121,8 +128,19 @@ async def run(repo: str, target_date: date) -> None:
     reply = await session.send_and_wait(prompt, timeout=300.0)
 
     content: str = ""
-    if reply and isinstance(reply.data, AssistantMessageData):
-        content = reply.data.content or ""
+    if reply and reply.type == SessionEventType.ASSISTANT_MESSAGE:
+        content = reply.data.message or ""
+
+    # Fallback: scan all accumulated messages for assistant reply
+    if not content:
+        for evt in reversed(session.get_messages()):
+            if (
+                evt.type == SessionEventType.ASSISTANT_MESSAGE
+                and evt.data
+                and evt.data.message
+            ):
+                content = evt.data.message
+                break
 
     if not content:
         print("No response received from Copilot.")
