@@ -37,7 +37,8 @@ jobs:
 
       - name: Run PR analysis
         env:
-          GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_TOKEN: ${{ secrets.COPILOT_TOKEN }}
         run: |
           REPO="${{ github.event.inputs.repo || 'microsoft/agent-framework' }}"
           DATE_ARG="${{ github.event.inputs.date }}"

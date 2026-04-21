@@ -9,9 +9,9 @@ Usage:
     python pr_trigger.py [--repo owner/name] [--date YYYY-MM-DD]
 
 Environment variables:
-    GITHUB_TOKEN           GitHub token for both the GitHub API and Copilot SDK
-                           auth (the built-in Actions token works for API calls;
-                           Copilot access requires a token with copilot scope).
+    GITHUB_TOKEN           GitHub token for the GitHub API (the built-in
+                           Actions token works for public repo searches).
+    COPILOT_TOKEN          GitHub PAT with Copilot scope for SDK auth.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ def fetch_merged_prs(repo: str, target_date: date) -> list[dict]:
     """Return a list of PR dicts merged on *target_date* (UTC) in *repo*."""
     date_str = target_date.isoformat()
     next_day = (target_date + timedelta(days=1)).isoformat()
-    query = f"repo:{repo} is:pr is:merged merged:{date_str}..{next_day}"
+    query = f"repo:{repo} is:pr is:merged merged:>={date_str} merged:<{next_day}"
     url = (
         "https://api.github.com/search/issues"
         f"?q={urllib.parse.quote(query)}&per_page=50&sort=updated&order=desc"
@@ -108,40 +108,57 @@ async def run(repo: str, target_date: date) -> None:
     pr_text = format_pr_list(prs, repo)
     print(f"  Found {len(prs)} PR(s).\n")
 
-    token = os.environ.get("GITHUB_TOKEN")
-    config = SubprocessConfig(github_token=token) if token else None
+    copilot_token = os.environ.get("COPILOT_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not copilot_token:
+        print("ERROR: Neither COPILOT_TOKEN nor GITHUB_TOKEN is set.")
+        sys.exit(1)
+    print(f"Using Copilot token: {'COPILOT_TOKEN' if os.environ.get('COPILOT_TOKEN') else 'GITHUB_TOKEN'}")
 
-    client = CopilotClient(config=config)
-    await client.start()
+    config = SubprocessConfig(github_token=copilot_token)
 
-    session: CopilotSession = await client.create_session(
-        skill_directories=[SKILL_DIR],
-        on_permission_request=lambda req: PermissionRequestResult(kind="approved"),
-    )
+    async with CopilotClient(config=config) as client:
+        print("Copilot client started.")
 
-    prompt = (
-        f"Analyze the following pull requests merged on {target_date} "
-        f"and produce a structured blog post following the pr-analyzer skill.\n\n"
-        f"{pr_text}"
-    )
+        session: CopilotSession = await client.create_session(
+            skill_directories=[SKILL_DIR],
+            on_permission_request=lambda req: PermissionRequestResult(kind="approved"),
+        )
+        print("Copilot session created.")
 
-    print("Sending prompt to Copilot …")
-    reply = await session.send_and_wait(prompt, timeout=300.0)
+        prompt = (
+            f"Analyze the following pull requests merged on {target_date} "
+            f"and produce a structured blog post following the pr-analyzer skill.\n\n"
+            f"{pr_text}"
+        )
 
-    content: str = ""
-    if reply and reply.type == SessionEventType.ASSISTANT_MESSAGE:
-        content = reply.data.message or ""
+        print("Sending prompt to Copilot …")
+        try:
+            reply = await session.send_and_wait(prompt, timeout=300.0)
+            print(f"Reply received: type={reply.type if reply else None}")
+        except Exception as exc:
+            print(f"ERROR during send_and_wait: {exc}")
+            reply = None
 
-    # Fallback: scan all accumulated messages for assistant reply
-    if not content:
-        for evt in reversed(await session.get_messages()):
-            if (
-                evt.type == SessionEventType.ASSISTANT_MESSAGE
-                and evt.data
-                and evt.data.message
-            ):
-                content = evt.data.message
-                break
+        content: str = ""
+        if reply and reply.type == SessionEventType.ASSISTANT_MESSAGE:
+            content = reply.data.message or ""
+
+        # Fallback: scan all accumulated messages for assistant reply
+        if not content:
+            try:
+                messages = await session.get_messages()
+                print(f"Scanning {len(messages)} accumulated message(s) …")
+                for evt in reversed(messages):
+                    print(f"  event type={evt.type}")
+                    if (
+                        evt.type == SessionEventType.ASSISTANT_MESSAGE
+                        and evt.data
+                        and evt.data.message
+                    ):
+                        content = evt.data.message
+                        break
+            except Exception as exc:
+                print(f"ERROR scanning messages: {exc}")
 
     if not content:
         print("No response received from Copilot.")
