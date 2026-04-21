@@ -24,26 +24,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Node.js (for Copilot CLI)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install Copilot CLI
-        run: npm install -g github/copilot
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install github-copilot-sdk --break-system-packages
+        run: pip install -r requirements.txt --break-system-packages
 
       - name: Run PR analysis
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPO="${{ github.event.inputs.repo || 'microsoft/agent-framework' }}"
@@ -59,7 +52,6 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add blog/
-          # Only commit if there is something new
           if ! git diff --cached --quiet; then
             git commit -m "chore: add PR summary $(date -u +%Y-%m-%d) [skip ci]"
             git push
