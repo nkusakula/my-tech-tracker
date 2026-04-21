@@ -26,6 +26,14 @@ import urllib.parse
 import urllib.request
 from datetime import date, timedelta
 
+# Load .env file if present (local development)
+_env_file = pathlib.Path(__file__).parent / ".env"
+if _env_file.exists():
+    for line in _env_file.read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
 from copilot.client import CopilotClient, SubprocessConfig
 from copilot.session import (
     CopilotSession,
