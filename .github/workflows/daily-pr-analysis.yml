@@ -1,0 +1,68 @@
+name: Daily PR Analysis
+
+on:
+  schedule:
+    # Monday–Friday at 00:05 UTC (gives GitHub a moment to index the previous day's merges)
+    - cron: '5 0 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'GitHub repository to analyse (owner/name)'
+        required: false
+        default: 'microsoft/agent-framework'
+      date:
+        description: 'Target date YYYY-MM-DD (leave blank for yesterday)'
+        required: false
+        default: ''
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js (for Copilot CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Copilot CLI
+        run: npm install -g github/copilot
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install github-copilot-sdk --break-system-packages
+
+      - name: Run PR analysis
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.event.inputs.repo || 'microsoft/agent-framework' }}"
+          DATE_ARG="${{ github.event.inputs.date }}"
+          if [ -n "$DATE_ARG" ]; then
+            python pr_trigger.py --repo "$REPO" --date "$DATE_ARG"
+          else
+            python pr_trigger.py --repo "$REPO"
+          fi
+
+      - name: Commit and push blog post
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add blog/
+          # Only commit if there is something new
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: add PR summary $(date -u +%Y-%m-%d) [skip ci]"
+            git push
+          else
+            echo "Nothing to commit."
+          fi
