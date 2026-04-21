@@ -64,7 +64,7 @@ def fetch_merged_prs(repo: str, target_date: date) -> list[dict]:
     query = f"repo:{repo} is:pr is:merged merged:>={date_str} merged:<{next_day}"
     url = (
         "https://api.github.com/search/issues"
-        f"?q={urllib.parse.quote(query)}&per_page=50&sort=updated&order=desc"
+        f"?q={urllib.parse.quote(query)}&per_page=15&sort=updated&order=desc"
     )
 
     req = urllib.request.Request(url, headers=_github_headers())
@@ -88,8 +88,7 @@ def format_pr_list(prs: list[dict], repo: str) -> str:
         )
         body = (pr.get("body") or "").strip()
         if body:
-            # Trim very long PR bodies
-            lines.append(f"  Description: {body[:400]}")
+            lines.append(f"  Description: {body[:250]}")
     return "\n".join(lines)
 
 
@@ -133,30 +132,36 @@ async def run(repo: str, target_date: date) -> None:
 
         print("Sending prompt to Copilot …")
         try:
-            reply = await session.send_and_wait(prompt, timeout=300.0)
+            reply = await session.send_and_wait(prompt, timeout=600.0)
             print(f"Reply received: type={reply.type if reply else None}")
         except Exception as exc:
             print(f"ERROR during send_and_wait: {exc}")
             reply = None
 
         content: str = ""
-        if reply and reply.type == SessionEventType.ASSISTANT_MESSAGE:
-            content = reply.data.message or ""
+        if reply and reply.data:
+            content = reply.data.content or reply.data.message or ""
 
-        # Fallback: scan all accumulated messages for assistant reply
+        # Fallback: scan all accumulated messages for the longest assistant text
         if not content:
             try:
                 messages = await session.get_messages()
                 print(f"Scanning {len(messages)} accumulated message(s) …")
+                best = ""
                 for evt in reversed(messages):
-                    print(f"  event type={evt.type}")
-                    if (
-                        evt.type == SessionEventType.ASSISTANT_MESSAGE
-                        and evt.data
-                        and evt.data.message
-                    ):
-                        content = evt.data.message
-                        break
+                    if evt.type == SessionEventType.ASSISTANT_MESSAGE and evt.data:
+                        text = evt.data.content or evt.data.message or ""
+                        # Debug: show available non-None fields
+                        if not best:
+                            non_none = {
+                                k: repr(v)[:80]
+                                for k, v in vars(evt.data).items()
+                                if v is not None
+                            }
+                            print(f"  DEBUG data fields: {non_none}")
+                        if len(text) > len(best):
+                            best = text
+                content = best
             except Exception as exc:
                 print(f"ERROR scanning messages: {exc}")
 
