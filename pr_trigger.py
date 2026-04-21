@@ -60,7 +60,8 @@ def _github_headers() -> dict[str, str]:
 def fetch_merged_prs(repo: str, target_date: date) -> list[dict]:
     """Return a list of PR dicts merged on *target_date* (UTC) in *repo*."""
     date_str = target_date.isoformat()
-    query = f"repo:{repo} is:pr is:merged merged:{date_str}"
+    next_day = (target_date + timedelta(days=1)).isoformat()
+    query = f"repo:{repo} is:pr is:merged merged:{date_str}..{next_day}"
     url = (
         "https://api.github.com/search/issues"
         f"?q={urllib.parse.quote(query)}&per_page=50&sort=updated&order=desc"
@@ -133,7 +134,7 @@ async def run(repo: str, target_date: date) -> None:
 
     # Fallback: scan all accumulated messages for assistant reply
     if not content:
-        for evt in reversed(session.get_messages()):
+        for evt in reversed(await session.get_messages()):
             if (
                 evt.type == SessionEventType.ASSISTANT_MESSAGE
                 and evt.data
